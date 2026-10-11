@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Select SAP SID - {{ company.name }}{% endblock %}
+
+{% block content %}
+<div class="header-bar">
+  <div style="display:flex; align-items:center;">
+    <a href="{{ url_for('home') }}" class="btn-back">← Back to Companies</a>
+    <div>
+      <h2 style="margin:0 0 6px 0;">Select the SIDs</h2>
+      <div class="breadcrumb">Landscape: <span style="color:#fff;">{{ company.name }}</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid-tiles">
+  {% for item in sids %}
+  <a href="{{ url_for('show_dashboard', company_id=company.id, sid=item.sid, host_type=item.hostType) }}" class="tile">
+    <div>
+      <h3 class="tile-title">SID: {{ item.sid }}</h3>
+      <p class="tile-desc">{{ item.desc }} (Inst: {{ item.instance }})</p>
+    </div>
+    <div class="tile-tag">{{ item.hostType }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

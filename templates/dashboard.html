@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Diagnostics: {{ sid }} ({{ host_type }}){% endblock %}
+
+{% block content %}
+<div class="header-bar">
+  <div style="display:flex; align-items:center;">
+    <a href="{{ url_for('show_sids', company_id=company['id']) }}" class="btn-back">← Back to SIDs</a>
+    <div>
+      <h2 style="margin:0 0 4px 0;">Connectivity Diagnostics</h2>
+      <div class="breadcrumb">
+        <a href="{{ url_for('home') }}">Companies</a> / 
+        <a href="{{ url_for('show_sids', company_id=company['id']) }}">{{ company['name'] }}</a> / 
+        <strong style="color:#fff;">{{ sid }} ({{ host_type }})</strong>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <div class="timer" id="timerDisplay">Next auto-refresh in: 05:00</div>
+    <button class="btn-action" onclick="triggerCheck()">🔄 Refresh Diagnostics Now</button>
+  </div>
+</div>
+
+<div class="dashboard-panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Source (DU Node)</th>
+        <th>Target & Port</th>
+        <th>Check Layer</th>
+        <th>Service Target</th>
+        <th>Status</th>
+        <th>Latency</th>
+        <th>Diagnostic Output</th>
+      </tr>
+    </thead>
+    <tbody id="statusTableBody">
+      <tr><td colspan="7" style="text-align:center; color:var(--text-sub);">Initializing probes...</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let targets = [];
+  let countdownSeconds = 300;
+  let timerInterval = null;
+
+  async function loadTargets() {
+    const tbody = document.getElementById('statusTableBody');
+    try {
+      const res = await fetch('/api/targets');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      targets = await res.json();
+      await triggerCheck();
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="7" style="color:#f87171; text-align:center;">Failed to load server targets catalog: ${err.message}</td></tr>`;
+    }
+  }
+
+  async function triggerCheck() {
+    countdownSeconds = 300;
+    const tbody = document.getElementById('statusTableBody');
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-sub);">Running live probes across all layers...</td></tr>';
+
+    try {
+      const res = await fetch('/api/check-connectivity', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      renderTable(result.data);
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="7" style="color:#f87171; text-align:center;">Failed to connect to probing engine: ${err.message}</td></tr>`;
+    }
+  }
+
+  function getBadgeClass(status) {
+    const s = String(status).toLowerCase();
+    if (['up', 'open', 'resolved'].includes(s)) return 'badge-open';
+    if (['down', 'timeout', 'failed'].includes(s)) return 'badge-down';
+    if (['refused', 'warning'].includes(s)) return 'badge-refused';
+    return '';
+  }
+
+  function renderTable(results) {
+    const tbody = document.getElementById('statusTableBody');
+    tbody.innerHTML = '';
+
+    if (!results || results.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-sub);">No probe results returned.</td></tr>';
+      return;
+    }
+
+    results.forEach(item => {
+      const meta = targets.find(t => t.id === item.target_id);
+      if (!meta) return;
+
+      const badgeClass = getBadgeClass(item.status);
+      const portDisplay = meta.port ? `:${meta.port}` : '';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${meta.source}</strong></td>
+        <td><code>${meta.dest}${portDisplay}</code></td>
+        <td><span class="badge badge-type">${meta.type}</span></td>
+        <td>${meta.label}</td>
+        <td><span class="badge ${badgeClass}">${item.status}</span></td>
+        <td>${item.latency_ms !== null ? item.latency_ms + ' ms' : '--'}</td>
+        <td style="color:var(--text-sub); font-size:12px;">${item.details || ''}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function startTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      countdownSeconds--;
+      const mins = String(Math.floor(countdownSeconds / 60)).padStart(2, '0');
+      const secs = String(countdownSeconds % 60).padStart(2, '0');
+      document.getElementById('timerDisplay').textContent = `Next auto-refresh in: ${mins}:${secs}`;
+
+      if (countdownSeconds <= 0) {
+        triggerCheck();
+      }
+    }, 1000);
+  }
+
+  loadTargets();
+  startTimer();
+</script>
+{% endblock %}

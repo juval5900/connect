@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Safran Landscape Directory{% endblock %}
+
+{% block content %}
+<div class="header-bar">
+  <div>
+    <h2 style="margin:0 0 6px 0;">Safran Landscape Connectivity</h2>
+    <div style="font-size:13px; color:var(--text-sub);">Select a Safran division to inspect Dollar Universe ⟷ SAP links</div>
+  </div>
+</div>
+
+<div class="grid-tiles">
+  {% for company in companies %}
+  <a href="{{ url_for('show_sids', company_id=company.id) }}" class="tile">
+    <div>
+      <h3 class="tile-title">{{ company.name }}</h3>
+      <p class="tile-desc">{{ company.desc }}</p>
+    </div>
+    <div class="tile-tag">{{ company.id }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}
