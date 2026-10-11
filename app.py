@@ -1,8 +1,11 @@
-import os
-import platform
 import sqlite3
-import subprocess
 import time
+from checks import (
+    run_dns_check,
+    run_http_check,
+    run_icmp_check,
+    run_tcp_check,
+)
 from flask import Flask, jsonify, render_template
 
 app = Flask(__name__)
@@ -13,67 +16,92 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # Table 1: Inventory of Dollar Universe and SAP hosts
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS server_targets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_host TEXT NOT NULL,
             dest_host TEXT NOT NULL,
+            port INTEGER,
+            check_type TEXT NOT NULL,
             label TEXT NOT NULL
         )
     """)
 
-    # Table 2: History log of ping checks
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ping_history (
+        CREATE TABLE IF NOT EXISTS connectivity_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             target_id INTEGER,
             checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             status TEXT NOT NULL,
             latency_ms REAL,
+            details TEXT,
             FOREIGN KEY(target_id) REFERENCES server_targets(id)
         )
     """)
 
-    # Seed sample hosts if empty
     cursor.execute("SELECT COUNT(*) FROM server_targets")
     if cursor.fetchone()[0] == 0:
         sample_servers = [
-            ("DU_PROD_NODE01", "10.20.30.40", "DU Node 1 -> SAP PAS (PRD)"),
-            ("DU_PROD_NODE01", "10.20.30.41", "DU Node 1 -> SAP AAS (PRD)"),
-            ("DU_DEV_NODE01", "10.20.30.50", "DU Dev -> SAP Sandbox"),
-            ("DU_PROD_NODE02", "8.8.8.8", "DU Node 2 -> External Test"),
+            (
+                "DU_PROD_NODE01",
+                "10.20.30.40",
+                3300,
+                "TCP_PORT",
+                "SAP Gateway (sapgw00)",
+            ),
+            (
+                "DU_PROD_NODE01",
+                "10.20.30.40",
+                3600,
+                "TCP_PORT",
+                "SAP Message Server (sapmsPRD)",
+            ),
+            (
+                "DU_PROD_NODE01",
+                "10.20.30.40",
+                None,
+                "PING",
+                "SAP PAS Host OS Ping",
+            ),
+            (
+                "DU_PROD_NODE01",
+                "sap-prd-app01.corp.local",
+                None,
+                "DNS",
+                "SAP Host DNS & Reverse PTR",
+            ),
+            (
+                "DU_PROD_NODE01",
+                "10.20.30.40",
+                8000,
+                "HTTP_ICM",
+                "SAP ICM Ping (/sap/public/ping)",
+            ),
+            (
+                "SAP_PAS_HOST",
+                "10.20.30.10",
+                10600,
+                "TCP_PORT",
+                "Dollar Universe IO Engine (DUAS)",
+            ),
+            (
+                "SAP_PAS_HOST",
+                "10.20.30.10",
+                4184,
+                "TCP_PORT",
+                "Univiewer Management Server (UVMS)",
+            ),
         ]
         cursor.executemany(
             """
-            INSERT INTO server_targets (source_host, dest_host, label)
-            VALUES (?, ?, ?)
+            INSERT INTO server_targets (source_host, dest_host, port, check_type, label)
+            VALUES (?, ?, ?, ?, ?)
         """,
             sample_servers,
         )
 
     conn.commit()
     conn.close()
-
-
-def run_ping(host):
-    # Ping command parameters based on OS (Windows uses -n, Linux/macOS uses -c)
-    param = "-n" if platform.system().lower() == "windows" else "-c"
-    timeout_param = "-w" if platform.system().lower() == "windows" else "-W"
-    command = ["ping", param, "1", timeout_param, "2", host]
-
-    start_time = time.time()
-    try:
-        output = subprocess.run(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        latency = round((time.time() - start_time) * 1000, 2)
-        if output.returncode == 0:
-            return "UP", latency
-        else:
-            return "DOWN", None
-    except Exception:
-        return "ERROR", None
 
 
 @app.route("/")
@@ -85,11 +113,22 @@ def home():
 def get_targets():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, source_host, dest_host, label FROM server_targets")
+    cursor.execute(
+        "SELECT id, source_host, dest_host, port, check_type, label FROM"
+        " server_targets"
+    )
     rows = cursor.fetchall()
     conn.close()
     return jsonify([
-        {"id": r[0], "source": r[1], "dest": r[2], "label": r[3]} for r in rows
+        {
+            "id": r[0],
+            "source": r[1],
+            "dest": r[2],
+            "port": r[3],
+            "type": r[4],
+            "label": r[5],
+        }
+        for r in rows
     ])
 
 
@@ -97,51 +136,42 @@ def get_targets():
 def check_connectivity():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
-    cursor.execute("SELECT id, dest_host FROM server_targets")
+    cursor.execute("SELECT id, dest_host, port, check_type FROM server_targets")
     targets = cursor.fetchall()
 
     results = []
-    for target_id, dest_host in targets:
-        status, latency = run_ping(dest_host)
+    for target_id, dest_host, port, check_type in targets:
+        if check_type == "PING":
+            status, latency, details = run_icmp_check(dest_host)
+        elif check_type == "TCP_PORT":
+            status, latency, details = run_tcp_check(dest_host, port)
+        elif check_type == "DNS":
+            status, latency, details = run_dns_check(dest_host)
+        elif check_type == "HTTP_ICM":
+            status, latency, details = run_http_check(dest_host, port)
+        else:
+            status, latency, details = "UNKNOWN", None, "Unrecognized test type"
+
         cursor.execute(
             """
-            INSERT INTO ping_history (target_id, status, latency_ms)
-            VALUES (?, ?, ?)
+            INSERT INTO connectivity_history (target_id, status, latency_ms, details)
+            VALUES (?, ?, ?, ?)
         """,
-            (target_id, status, latency),
+            (target_id, status, latency, details),
         )
 
         results.append({
             "target_id": target_id,
-            "host": dest_host,
             "status": status,
             "latency_ms": latency,
+            "details": details,
         })
 
     conn.commit()
     conn.close()
-    return jsonify({"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "data": results})
-
-
-@app.route("/api/history/<int:target_id>", methods=["GET"])
-def get_history(target_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT checked_at, status, latency_ms 
-        FROM ping_history 
-        WHERE target_id = ? 
-        ORDER BY checked_at DESC LIMIT 10
-    """,
-        (target_id,),
+    return jsonify(
+        {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "data": results}
     )
-    rows = cursor.fetchall()
-    conn.close()
-    return jsonify([
-        {"checked_at": r[0], "status": r[1], "latency_ms": r[2]} for r in rows
-    ])
 
 
 if __name__ == "__main__":
