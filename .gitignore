@@ -1,4 +1,13 @@
-.venv/ 
-__pycache__/ 
-*.pyc 
-.env
+# macOS metadata
+._*
+*/._*
+.DS_Store
+
+# Git internal pack metadata on external disks
+.git/**/._*
+
+# Python & DB
+.venv/
+__pycache__/
+*.pyc
+connectivity.db*
