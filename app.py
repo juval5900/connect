@@ -18,7 +18,7 @@ SAFRAN_COMPANIES = {
         "name": "Safran Landing Systems",
         "desc": "Landing gears, wheels, and braking systems",
     },
-    "SG": {
+    "SSA": {
         "id": "SSA",
         "name": "Safran Group",
         "desc": "Corporate central systems and shared services",
